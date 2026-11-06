@@ -6,7 +6,7 @@
 ## 安装
 
 1. 关闭游戏。
-2. 在 UMM 中使用 `Install Mod` 选择 `StutterFixZh-0.1.8.zip`。
+2. 在 UMM 中使用 `Install Mod` 选择 `StutterFixZh-0.1.9.zip`。
 3. 或把 ZIP 中的 `StutterFixZh` 文件夹解压到：
 
 ```text

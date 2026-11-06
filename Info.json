@@ -2,7 +2,7 @@
   "Id": "StutterFixZh",
   "DisplayName": "Stutter Fix 中文补丁",
   "Author": "HitMargin",
-  "Version": "0.1.8",
+  "Version": "0.1.9",
   "ManagerVersion": "0.22.14.0",
   "AssemblyName": "StutterFixZh.dll",
   "EntryMethod": "StutterFixZh.Main.Load",
