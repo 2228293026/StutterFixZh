@@ -23,6 +23,7 @@ namespace StutterFixZh
         private static Dictionary<string, string> translations;
         private static string currentLanguage = "";
         private static int languageRefreshFrame;
+        private static float installRetryTimer;
         private static object activeWindow;
 
         private static Type windowType;
@@ -48,7 +49,16 @@ namespace StutterFixZh
         private static void OnUpdate(UnityModManager.ModEntry modEntry, float deltaSeconds)
         {
             if (!installed)
+            {
+                // Retrying every frame would burn reflection lookups forever when
+                // StutterFix is absent; a short throttle is enough to catch it
+                // whenever UMM finishes loading mods.
+                installRetryTimer += deltaSeconds;
+                if (installRetryTimer < 1f)
+                    return;
+                installRetryTimer = 0f;
                 TryInstall();
+            }
             else
             {
                 // The original mod owns Settings.Language; refresh it so a missed
@@ -84,6 +94,15 @@ namespace StutterFixZh
 
             try
             {
+                // Fast gate: check UMM's mod list by Id before touching reflection.
+                // TypeByName scans every assembly; this is a plain string compare.
+                var target = UnityModManager.modEntries.Find(m => m.Info.Id == "StutterFix");
+                if (target == null || !target.Active)
+                {
+                    LogMissing("StutterFix mod (not loaded or disabled)");
+                    return;
+                }
+
                 windowType = AccessTools.TypeByName("StutterFix.SettingsWindow");
                 var mainType = AccessTools.TypeByName("StutterFix.Main");
                 if (windowType == null || mainType == null)

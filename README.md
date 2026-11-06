@@ -31,7 +31,7 @@ A Dance of Fire and Ice/UMMMods/StutterFixZh/
 - 不写入、不替换原 `StutterFix.dll`。
 - 只修补 `StutterFix.SettingsWindow.T`、语言按钮状态和标题栏按钮绘制。
 - 卸载本模组时只移除 Harmony ID `StutterFixZh`，不会移除其它模组的补丁。
-- 词库覆盖原 DLL 中 652 个静态 `T()` 键，并包含动态效果名、滤镜分组和提示模板。
+- 词库覆盖原 DLL 全部 585 处静态 `T()` 调用（735 个词条），并包含动态效果名、滤镜分组和提示模板。
 
 ## 构建
 
