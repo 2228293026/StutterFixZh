@@ -246,40 +246,46 @@ namespace StutterFixZh
             return normalizedTranslations;
         }
 
-        // Some upstream strings are UTF-8 bytes reinterpreted as Latin-1 (for example
-        // U+00E2 U+0086 U+0092 for "→"). Only repair this exact kind of mojibake instead
-        // of rewriting every high-bit char, which would corrupt legitimate text.
+        // Some upstream strings contain UTF-8 bytes reinterpreted as Latin-1
+        // (for example U+00E2 U+0086 U+0092 for "→"). Only try decoding strings
+        // with C1 control characters, which are a strong signal of this corruption.
         private static string FixMojibake(string text)
         {
             if (string.IsNullOrEmpty(text))
                 return text;
 
-            var hasHigh = false;
+            var hasC1Control = false;
             foreach (var c in text)
             {
-                if (c >= '\u0080' && c <= '\u00FF') { hasHigh = true; break; }
+                if (c >= '\u0080' && c <= '\u009F') { hasC1Control = true; break; }
             }
-            if (!hasHigh)
+            if (!hasC1Control || text.Any(c => c > '\u00FF'))
                 return text;
 
-            // Heuristic: these mojibake sequences are usually a series of Latin-1 bytes that
-            // decode cleanly as valid UTF-8 when reinterpreted. If the result still contains
-            // replacement characters or remains mostly ASCII, leave the original text alone.
             try
             {
                 var bytes = System.Text.Encoding.GetEncoding("iso-8859-1").GetBytes(text);
-                var fixedText = System.Text.Encoding.UTF8.GetString(bytes);
-                if (fixedText.Contains("\uFFFD"))
-                    return text;
-                var asciiRatio = fixedText.Count(ch => ch < 0x80) / (float)Math.Max(1, fixedText.Length);
-                if (asciiRatio > 0.9f && text.Any(ch => ch > 0x7F))
-                    return text;
-                return fixedText;
+                return new System.Text.UTF8Encoding(false, true).GetString(bytes);
             }
-            catch
+            catch (System.Text.DecoderFallbackException)
             {
                 return text;
             }
+        }
+
+        private static Dictionary<string, string> caseInsensitiveTranslations;
+
+        private static Dictionary<string, string> GetCaseInsensitiveTranslations()
+        {
+            if (caseInsensitiveTranslations != null)
+                return caseInsensitiveTranslations;
+            caseInsensitiveTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in translations)
+            {
+                if (!caseInsensitiveTranslations.ContainsKey(pair.Key))
+                    caseInsensitiveTranslations[pair.Key] = pair.Value;
+            }
+            return caseInsensitiveTranslations;
         }
 
         private static bool TryLookup(string text, out string zh)
@@ -292,6 +298,10 @@ namespace StutterFixZh
             var normalized = NormalizeKey(text);
             if (normalized.Length > 0 && normalized != text
                 && GetNormalizedTranslations().TryGetValue(normalized, out zh) && !string.IsNullOrEmpty(zh))
+                return true;
+            // The upstream lower-cases some dynamic fragments (e.g. effect names in
+            // "Turn off <name>"), while the dictionary keys keep their original casing.
+            if (GetCaseInsensitiveTranslations().TryGetValue(text, out zh) && !string.IsNullOrEmpty(zh))
                 return true;
             return false;
         }
@@ -486,9 +496,9 @@ namespace StutterFixZh
             }
         }
 
-        // Replaces the two original language buttons. The original click branch
-        // can be skipped when another GUI event has already claimed the control,
-        // so this method owns the click and persists the language itself.
+        // Replaces the two original buttons to supply a third selected state;
+        // their original click branches remain responsible for saving ko/en.
+        // The injected Chinese button has no upstream click branch to handle it.
         private static bool LanguageButton(Rect rect, string label, GUIStyle originalStyle)
         {
             if (activeWindow == null || tabField == null || tabOnField == null)
@@ -499,10 +509,12 @@ namespace StutterFixZh
                 || (label == "English" && SelectedLanguage() == "en");
             var style = ((selected ? tabOnField : tabField).GetValue(activeWindow) as GUIStyle) ?? originalStyle;
             if (style == null)
-                return false;
+                style = GUI.skin.button;
 
             var clicked = GUI.Button(rect, label, style);
-            if (clicked)
+            // The upstream Korean/English click branches call SetLanguage themselves.
+            // Only the injected Chinese button needs to apply its language here.
+            if (clicked && label == "中文")
                 TryApplySelectedLanguage(label);
             return clicked;
         }
