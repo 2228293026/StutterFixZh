@@ -246,11 +246,14 @@ namespace StutterFixZh
             return normalizedTranslations;
         }
 
-        // The upstream source itself contains mojibake arrows (UTF-8 bytes stored
-        // as Latin-1 chars, e.g. U+00E2 U+0086 U+0092 for "→"). Re-encode those
-        // chars back to bytes and decode as UTF-8 to recover the real text.
+        // Some upstream strings are UTF-8 bytes reinterpreted as Latin-1 (for example
+        // U+00E2 U+0086 U+0092 for "→"). Only repair this exact kind of mojibake instead
+        // of rewriting every high-bit char, which would corrupt legitimate text.
         private static string FixMojibake(string text)
         {
+            if (string.IsNullOrEmpty(text))
+                return text;
+
             var hasHigh = false;
             foreach (var c in text)
             {
@@ -258,16 +261,20 @@ namespace StutterFixZh
             }
             if (!hasHigh)
                 return text;
-            var bytes = new byte[text.Length];
-            for (var i = 0; i < text.Length; i++)
-            {
-                var c = text[i];
-                bytes[i] = c <= '\u00FF' ? (byte)c : (byte)'?';
-            }
+
+            // Heuristic: these mojibake sequences are usually a series of Latin-1 bytes that
+            // decode cleanly as valid UTF-8 when reinterpreted. If the result still contains
+            // replacement characters or remains mostly ASCII, leave the original text alone.
             try
             {
+                var bytes = System.Text.Encoding.GetEncoding("iso-8859-1").GetBytes(text);
                 var fixedText = System.Text.Encoding.UTF8.GetString(bytes);
-                return fixedText.IndexOf('\uFFFD') >= 0 ? text : fixedText;
+                if (fixedText.Contains("\uFFFD"))
+                    return text;
+                var asciiRatio = fixedText.Count(ch => ch < 0x80) / (float)Math.Max(1, fixedText.Length);
+                if (asciiRatio > 0.9f && text.Any(ch => ch > 0x7F))
+                    return text;
+                return fixedText;
             }
             catch
             {
@@ -325,81 +332,91 @@ namespace StutterFixZh
                 chinese = "高级 · " + english.Substring("Advanced · ".Length);
                 return true;
             }
-            if (english.StartsWith("Turn off ", StringComparison.Ordinal))
+
+            if (english.StartsWith("Turn off ", StringComparison.OrdinalIgnoreCase))
             {
                 var rest = english.Substring("Turn off ".Length);
-                foreach (var pair in translations)
+                if (TryLookup(rest, out var matched))
                 {
-                    if (!string.IsNullOrWhiteSpace(pair.Value)
-                        && string.Equals(pair.Key, rest, StringComparison.OrdinalIgnoreCase))
-                    {
-                        chinese = "关闭 " + pair.Value;
-                        return true;
-                    }
+                    chinese = "关闭 " + matched;
+                    return true;
                 }
                 chinese = "关闭 " + rest;
                 return true;
             }
+
+            if (english.StartsWith("Cycle with ", StringComparison.Ordinal) && english.Contains(" in game", StringComparison.Ordinal))
+            {
+                var middle = english.Substring("Cycle with ".Length);
+                var suffix = " in game";
+                var idx = middle.IndexOf(suffix, StringComparison.Ordinal);
+                if (idx >= 0)
+                {
+                    middle = middle.Substring(0, idx);
+                    chinese = "游戏中按 " + middle + " 依次切换（在 Home 页更改按键）。点击图标可展开详细。";
+                    return true;
+                }
+            }
+
+            if (english.StartsWith("   Press <b>", StringComparison.Ordinal) && english.Contains("</b>", StringComparison.Ordinal))
+            {
+                var start = "   Press <b>".Length;
+                var end = english.IndexOf("</b>", StringComparison.Ordinal);
+                if (end > start)
+                {
+                    chinese = "   游戏中随时按 <b>" + english.Substring(start, end - start) + "</b> 打开或关闭设置。";
+                    return true;
+                }
+            }
+
             if (english.StartsWith("Windows on top of the game: ", StringComparison.Ordinal)
-                && english.EndsWith(". Closing these programs (desktop pets, overlays, etc.) should raise FPS.", StringComparison.Ordinal))
+                && english.Contains("Closing these programs", StringComparison.Ordinal))
             {
-                var middle = english.Substring(
-                    "Windows on top of the game: ".Length,
-                    english.Length - "Windows on top of the game: ".Length
-                        - ". Closing these programs (desktop pets, overlays, etc.) should raise FPS.".Length);
-                chinese = "游戏画面上方的窗口：" + middle + "。关闭这些程序（桌面宠物、叠加层等）应能提升 FPS。";
-                return true;
+                var left = "Windows on top of the game: ".Length;
+                var right = english.IndexOf(". Closing these programs", StringComparison.Ordinal);
+                if (right > left)
+                {
+                    chinese = "游戏画面上方的窗口：" + english.Substring(left, right - left) + "。关闭这些程序（桌面宠物、叠加层等）应能提升 FPS。";
+                    return true;
+                }
             }
+
             if (english.StartsWith("Programs capturing the screen: ", StringComparison.Ordinal)
-                && english.EndsWith(" (remote desktop, recording, streaming). Closing them while playing should raise FPS.", StringComparison.Ordinal))
+                && english.Contains("Closing them while playing should raise FPS.", StringComparison.Ordinal))
             {
-                var middle = english.Substring(
-                    "Programs capturing the screen: ".Length,
-                    english.Length - "Programs capturing the screen: ".Length
-                        - " (remote desktop, recording, streaming). Closing them while playing should raise FPS.".Length);
-                chinese = "正在捕获屏幕的程序：" + middle + "（远程桌面、录制、串流）。游玩时关闭它们应能提升 FPS。";
-                return true;
+                var left = "Programs capturing the screen: ".Length;
+                var right = english.IndexOf(" (remote desktop, recording, streaming).", StringComparison.Ordinal);
+                if (right > left)
+                {
+                    chinese = "正在捕获屏幕的程序：" + english.Substring(left, right - left) + "（远程桌面、录制、串流）。游玩时关闭它们应能提升 FPS。";
+                    return true;
+                }
             }
+
             if (english.StartsWith("The game ended abnormally last time (during: ", StringComparison.Ordinal)
-                && english.EndsWith("). If it happens again, safe mode turns on automatically.", StringComparison.Ordinal))
+                && english.Contains("). If it happens again, safe mode turns on automatically.", StringComparison.Ordinal))
             {
-                var middle = english.Substring(
-                    "The game ended abnormally last time (during: ".Length,
-                    english.Length - "The game ended abnormally last time (during: ".Length
-                        - "). If it happens again, safe mode turns on automatically.".Length);
-                chinese = "上次游戏异常结束（当时处于：" + middle + "）。如果再次发生，将自动进入安全模式。";
-                return true;
+                var left = "The game ended abnormally last time (during: ".Length;
+                var right = english.IndexOf("). If it happens again, safe mode turns on automatically.", StringComparison.Ordinal);
+                if (right > left)
+                {
+                    chinese = "上次游戏异常结束（当时处于：" + english.Substring(left, right - left) + "）。如果再次发生，将自动进入安全模式。";
+                    return true;
+                }
             }
+
             if (english.StartsWith("Safe mode: ", StringComparison.Ordinal)
-                && english.EndsWith(". Features that hook deep into the game are off for this run. After a normal exit they come back next launch.", StringComparison.Ordinal))
+                && english.Contains("Features that hook deep into the game are off for this run", StringComparison.Ordinal))
             {
-                var middle = english.Substring(
-                    "Safe mode: ".Length,
-                    english.Length - "Safe mode: ".Length
-                        - ". Features that hook deep into the game are off for this run. After a normal exit they come back next launch.".Length);
-                chinese = "安全模式：" + middle + "。本次运行会关闭深度挂钩游戏的功能，正常退出后下次启动恢复。";
-                return true;
+                var left = "Safe mode: ".Length;
+                var right = english.IndexOf(". Features that hook deep into the game are off for this run", StringComparison.Ordinal);
+                if (right > left)
+                {
+                    chinese = "安全模式：" + english.Substring(left, right - left) + "。本次运行会关闭深度挂钩游戏的功能，正常退出后下次启动恢复。";
+                    return true;
+                }
             }
-            if (english.StartsWith("   Press <b>", StringComparison.Ordinal)
-                && english.EndsWith("</b> at any time in game to open or close it.", StringComparison.Ordinal))
-            {
-                var middle = english.Substring(
-                    "   Press <b>".Length,
-                    english.Length - "   Press <b>".Length
-                        - "</b> at any time in game to open or close it.".Length);
-                chinese = "   游戏中随时按 <b>" + middle + "</b> 打开或关闭设置。";
-                return true;
-            }
-            if (english.StartsWith("Cycle with ", StringComparison.Ordinal)
-                && english.EndsWith(" in game (change it on Home). Click the icon to expand it.", StringComparison.Ordinal))
-            {
-                var middle = english.Substring(
-                    "Cycle with ".Length,
-                    english.Length - "Cycle with ".Length
-                        - " in game (change it on Home). Click the icon to expand it.".Length);
-                chinese = "游戏中按 " + middle + " 依次切换（在 Home 页更改按键）。点击图标可展开详细。";
-                return true;
-            }
+
             return false;
         }
 
@@ -407,7 +424,9 @@ namespace StutterFixZh
         {
             var previous = currentLanguage;
             currentLanguage = lang ?? "";
-            if (previous != currentLanguage)
+            if (string.IsNullOrEmpty(currentLanguage))
+                currentLanguage = SelectedLanguage();
+            if (!string.Equals(previous, currentLanguage, StringComparison.Ordinal))
                 entry?.Logger.Log("[Chinese] language " + (previous.Length == 0 ? "auto" : previous)
                     + " -> " + (currentLanguage.Length == 0 ? "auto" : currentLanguage));
         }
@@ -439,6 +458,34 @@ namespace StutterFixZh
             LanguageButton(button, "中文", null);
         }
 
+        private static bool TryApplySelectedLanguage(string label)
+        {
+            if (activeWindow == null || setLanguageMethod == null)
+                return false;
+
+            string language = label switch
+            {
+                "中文" => ChineseLanguage,
+                "한국어" => "ko",
+                "English" => "en",
+                _ => null,
+            };
+            if (language == null)
+                return false;
+
+            try
+            {
+                setLanguageMethod.Invoke(activeWindow, new object[] { language });
+                currentLanguage = language;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                entry?.Logger.Error("[Chinese] language switch failed: " + ex.Message);
+                return false;
+            }
+        }
+
         // Replaces the two original language buttons. The original click branch
         // can be skipped when another GUI event has already claimed the control,
         // so this method owns the click and persists the language itself.
@@ -455,62 +502,19 @@ namespace StutterFixZh
                 return false;
 
             var clicked = GUI.Button(rect, label, style);
-            if (clicked && activeWindow != null && setLanguageMethod != null)
-            {
-                var language = label switch
-                {
-                    "中文" => ChineseLanguage,
-                    "한국어" => "ko",
-                    "English" => "en",
-                    _ => null,
-                };
-                if (language == null)
-                    return false;
-                setLanguageMethod.Invoke(activeWindow, new object[] { language });
-            }
-            return false;
+            if (clicked)
+                TryApplySelectedLanguage(label);
+            return clicked;
         }
 
         private static IEnumerable<CodeInstruction> DrawContentsTranspiler(IEnumerable<CodeInstruction> instructions)
         {
             var list = instructions.ToList();
             var inserted = false;
-            for (var i = 0; i + 6 < list.Count; i++)
-            {
-                if (!IsLoadLocal0(list[i]) || !IsLdcR4(list[i + 1], 176f) || list[i + 2].opcode != OpCodes.Sub)
-                    continue;
-                list.InsertRange(i, new[]
-                {
-                    new CodeInstruction(OpCodes.Ldarg_0),
-                    new CodeInstruction(OpCodes.Call,
-                        AccessTools.Method(typeof(Main), nameof(DrawChineseButton), new[] { typeof(object) }))
-                });
-                inserted = true;
-                break;
-            }
-
             var stylePatches = 0;
             var languageButtonPatches = 0;
-            for (var i = 1; i < list.Count; i++)
-            {
-                if (list[i].opcode != OpCodes.Call || !(list[i].operand is MethodInfo method) || method.Name != "get_English")
-                    continue;
-                if (list[i - 1].opcode != OpCodes.Ldstr)
-                    continue;
-                var label = list[i - 1].operand as string;
-                if (label == "한국어")
-                {
-                    list[i].operand = AccessTools.Method(typeof(Main), nameof(KoreanSelected));
-                    stylePatches++;
-                }
-                else if (label == "English")
-                {
-                    list[i].operand = AccessTools.Method(typeof(Main), nameof(EnglishSelected));
-                    stylePatches++;
-                }
-            }
 
-            for (var i = 1; i < list.Count; i++)
+            for (var i = 0; i < list.Count; i++)
             {
                 if (list[i].opcode != OpCodes.Call || !(list[i].operand is MethodInfo method)
                     || method.Name != "Button" || method.DeclaringType != typeof(GUI)
@@ -536,6 +540,41 @@ namespace StutterFixZh
                 list[i].operand = AccessTools.Method(typeof(Main), nameof(LanguageButton),
                     new[] { typeof(Rect), typeof(string), typeof(GUIStyle) });
                 languageButtonPatches++;
+            }
+
+            // Always add the dedicated Chinese button. Even when the original Korean/English
+            // buttons are detected and replaced, we still need a third language toggle in the settings
+            // header. This keeps the compatibility patch stable across minor UI changes and makes the
+            // Chinese option visible again in the current upstream layout.
+            var retIndex = list.FindLastIndex(i => i.opcode == OpCodes.Ret);
+            if (retIndex >= 0)
+            {
+                list.InsertRange(retIndex, new[]
+                {
+                    new CodeInstruction(OpCodes.Ldarg_0),
+                    new CodeInstruction(OpCodes.Call,
+                        AccessTools.Method(typeof(Main), nameof(DrawChineseButton), new[] { typeof(object) }))
+                });
+                inserted = true;
+            }
+
+            for (var i = 1; i < list.Count; i++)
+            {
+                if (list[i].opcode != OpCodes.Call || !(list[i].operand is MethodInfo method) || method.Name != "get_English")
+                    continue;
+                if (list[i - 1].opcode != OpCodes.Ldstr)
+                    continue;
+                var label = list[i - 1].operand as string;
+                if (label == "한국어")
+                {
+                    list[i].operand = AccessTools.Method(typeof(Main), nameof(KoreanSelected));
+                    stylePatches++;
+                }
+                else if (label == "English")
+                {
+                    list[i].operand = AccessTools.Method(typeof(Main), nameof(EnglishSelected));
+                    stylePatches++;
+                }
             }
 
             entry?.Logger.Log("[Chinese] DrawContents pattern: button=" + inserted
